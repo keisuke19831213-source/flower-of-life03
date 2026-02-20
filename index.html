@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>メタトロンキューブ — Metatron's Cube</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #canvas {
+      width: 100vmin;
+      height: 100vmin;
+      cursor: pointer;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+
+<svg id="canvas" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg"></svg>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script>
+// ================================================================
+// メタトロンキューブ + フラワーオブライフ
+// クリックで 金色 → インディゴ → エメラルド とカラーモード切り替え
+// D3.js v7 × 神聖幾何学ビジュアライゼーション
+// ================================================================
+
+const W = 800, H = 800;
+const cx = W / 2, cy = H / 2;
+const R = 72;
+
+// ──────────────────────────────────────────────────────────────
+// ① カラーパレット定義（3モード）
+// ──────────────────────────────────────────────────────────────
+const PALETTES = [
+  {
+    id: 0,
+    label:  "✦  FLOWER  OF  LIFE  ✦",
+    main:   "#FFD700",   // 金色
+    bright: "#FFF8DC",   // コーンシルク（最も明るい）
+    dark:   "#B8860B",   // ダークゴールド
+    g0:     "#FFFACD",   // グラジエント内側
+    g1:     "#FFD700",   // グラジエント中間
+    g2:     "#B8860B",   // グラジエント外側
+    cube:   "#FFD700",   // メタトロン線
+    cubeOp: 0.12,        // メタトロン線の透明度
+  },
+  {
+    id: 1,
+    label:  "✦  METATRON'S  CUBE  ✦",
+    main:   "#818CF8",   // インディゴ-400
+    bright: "#C7D2FE",   // インディゴ-200
+    dark:   "#3730A3",   // インディゴ-800
+    g0:     "#E0E7FF",
+    g1:     "#818CF8",
+    g2:     "#3730A3",
+    cube:   "#A5B4FC",   // メタトロン線（明るい）
+    cubeOp: 0.30,        // インディゴモードでは線を強調
+  },
+  {
+    id: 2,
+    label:  "✦  SACRED  GEOMETRY  ✦",
+    main:   "#34D399",   // エメラルド-400
+    bright: "#A7F3D0",   // エメラルド-200
+    dark:   "#065F46",   // エメラルド-900
+    g0:     "#D1FAE5",
+    g1:     "#34D399",
+    g2:     "#065F46",
+    cube:   "#6EE7B7",   // メタトロン線
+    cubeOp: 0.20,
+  },
+];
+
+let modeIndex = 0;
+let pal = PALETTES[0];
+
+const svg = d3.select("#canvas");
+const defs = svg.append("defs");
+
+// ──────────────────────────────────────────────────────────────
+// ② SVGフィルター定義（グロー）
+// ──────────────────────────────────────────────────────────────
+
+// 標準グロー
+const fg = defs.append("filter").attr("id", "glow")
+  .attr("x", "-60%").attr("y", "-60%").attr("width", "220%").attr("height", "220%");
+fg.append("feGaussianBlur").attr("in", "SourceGraphic").attr("stdDeviation", "3.5").attr("result", "b");
+const fm1 = fg.append("feMerge");
+fm1.append("feMergeNode").attr("in", "b");
+fm1.append("feMergeNode").attr("in", "SourceGraphic");
+
+// 強いグロー
+const fsg = defs.append("filter").attr("id", "strongGlow")
+  .attr("x", "-120%").attr("y", "-120%").attr("width", "340%").attr("height", "340%");
+fsg.append("feGaussianBlur").attr("in", "SourceGraphic").attr("stdDeviation", "7").attr("result", "b");
+const fm2 = fsg.append("feMerge");
+fm2.append("feMergeNode").attr("in", "b");
+fm2.append("feMergeNode").attr("in", "SourceGraphic");
+
+// 極強グロー（中心点）
+const fxg = defs.append("filter").attr("id", "xGlow")
+  .attr("x", "-200%").attr("y", "-200%").attr("width", "500%").attr("height", "500%");
+fxg.append("feGaussianBlur").attr("in", "SourceGraphic").attr("stdDeviation", "12").attr("result", "b");
+const fm3 = fxg.append("feMerge");
+fm3.append("feMergeNode").attr("in", "b");
+fm3.append("feMergeNode").attr("in", "SourceGraphic");
+
+// ──────────────────────────────────────────────────────────────
+// ③ グラジエント定義（カラー切り替え対応）
+// ──────────────────────────────────────────────────────────────
+
+// 中央の光（放射状）
+const gradCenter = defs.append("radialGradient").attr("id", "gradCenter")
+  .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
+gradCenter.append("stop").attr("class", "gc0").attr("offset", "0%")
+  .attr("stop-color", pal.g0).attr("stop-opacity", 0.45);
+gradCenter.append("stop").attr("class", "gc1").attr("offset", "40%")
+  .attr("stop-color", pal.g1).attr("stop-opacity", 0.2);
+gradCenter.append("stop").attr("class", "gc2").attr("offset", "80%")
+  .attr("stop-color", pal.g2).attr("stop-opacity", 0.05);
+gradCenter.append("stop").attr("class", "gc3").attr("offset", "100%")
+  .attr("stop-color", "#000").attr("stop-opacity", 0);
+
+// ビネット（周辺減光 - モード非依存）
+const gradVignette = defs.append("radialGradient").attr("id", "gradVignette")
+  .attr("cx", "50%").attr("cy", "50%").attr("r", "50%");
+gradVignette.append("stop").attr("offset", "55%")
+  .attr("stop-color", "#000").attr("stop-opacity", 0);
+gradVignette.append("stop").attr("offset", "100%")
+  .attr("stop-color", "#000").attr("stop-opacity", 0.75);
+
+// ──────────────────────────────────────────────────────────────
+// ④ 背景レイヤー
+// ──────────────────────────────────────────────────────────────
+
+svg.append("rect").attr("width", W).attr("height", H).attr("fill", "#00000C");
+
+// 星粒子
+const starData = d3.range(160).map(() => ({
+  x: Math.random() * W, y: Math.random() * H,
+  r: Math.random() * 0.85 + 0.1, opacity: Math.random() * 0.28 + 0.04
+}));
+svg.selectAll(".bg-star").data(starData).join("circle")
+  .attr("class", "bg-star")
+  .attr("cx", d => d.x).attr("cy", d => d.y)
+  .attr("r",  d => d.r).attr("fill", "#F0EAFF").attr("opacity", d => d.opacity);
+
+// 中央の光
+svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", R * 3.8)
+  .attr("fill", "url(#gradCenter)");
+
+// ──────────────────────────────────────────────────────────────
+// ⑤ 六角格子の中心点を生成
+// ──────────────────────────────────────────────────────────────
+// 格子点(m,n)の距離 = R*√(m²+mn+n²)
+
+function genHexGrid(maxRing) {
+  const pts = [];
+  for (let m = -(maxRing + 1); m <= maxRing + 1; m++) {
+    for (let n = -(maxRing + 1); n <= maxRing + 1; n++) {
+      const dSq = m*m + m*n + n*n;
+      if (dSq <= maxRing * maxRing) {
+        pts.push({
+          m, n, dSq,
+          ring: Math.round(Math.sqrt(dSq)),
+          x: cx + R * (m + n * 0.5),
+          y: cy + R * n * (Math.sqrt(3) * 0.5)
+        });
+      }
+    }
+  }
+  return pts;
+}
+
+const centers19    = genHexGrid(2);                               // 主要19円
+const centersOuter = genHexGrid(3).filter(d => d.ring === 3);    // 外側装飾18円
+
+// ──────────────────────────────────────────────────────────────
+// ⑥ 外側の装飾リング
+// ──────────────────────────────────────────────────────────────
+
+// 内側の境界リング（3重）
+[
+  { r: R * 2.78, w: 0.5, op: 0.35 },
+  { r: R * 2.87, w: 1.3, op: 0.50 },
+  { r: R * 2.96, w: 0.5, op: 0.35 },
+].forEach(({ r, w, op }) => {
+  svg.append("circle").attr("class", "decor-ring inner-ring")
+    .attr("cx", cx).attr("cy", cy).attr("r", r)
+    .attr("fill", "none").attr("stroke", pal.main)
+    .attr("stroke-width", w).attr("opacity", op).attr("filter", "url(#glow)");
+});
+
+// 外側の大きな装飾リング（3重）
+[
+  { r: R * 4.68, w: 0.4, op: 0.22 },
+  { r: R * 4.80, w: 1.1, op: 0.32 },
+  { r: R * 4.93, w: 0.4, op: 0.22 },
+].forEach(({ r, w, op }) => {
+  svg.append("circle").attr("class", "decor-ring outer-ring")
+    .attr("cx", cx).attr("cy", cy).attr("r", r)
+    .attr("fill", "none").attr("stroke", pal.main)
+    .attr("stroke-width", w).attr("opacity", op).attr("filter", "url(#glow)");
+});
+
+// 目盛り
+const tickR = R * 4.80;
+d3.range(72).forEach(i => {
+  const ang   = (i / 72) * 2 * Math.PI - Math.PI / 2;
+  const len   = i % 6 === 0 ? 16 : i % 3 === 0 ? 10 : 5;
+  const thick = i % 6 === 0 ? 0.9 : 0.4;
+  svg.append("line").attr("class", "tick-line")
+    .attr("x1", cx + tickR * Math.cos(ang)).attr("y1", cy + tickR * Math.sin(ang))
+    .attr("x2", cx + (tickR + len) * Math.cos(ang)).attr("y2", cy + (tickR + len) * Math.sin(ang))
+    .attr("stroke", pal.main).attr("stroke-width", thick).attr("opacity", 0.32);
+});
+
+// 外輪6頂点の宝石
+d3.range(6).forEach(i => {
+  const ang  = (i / 6) * 2 * Math.PI - Math.PI / 2;
+  const gemR = R * 4.93;
+  svg.append("circle").attr("class", "gem-aura")
+    .attr("cx", cx + gemR * Math.cos(ang)).attr("cy", cy + gemR * Math.sin(ang))
+    .attr("r", 5).attr("fill", pal.main).attr("opacity", 0.15)
+    .attr("filter", "url(#strongGlow)");
+  svg.append("circle").attr("class", "gem-core")
+    .attr("cx", cx + gemR * Math.cos(ang)).attr("cy", cy + gemR * Math.sin(ang))
+    .attr("r", 2.5).attr("fill", pal.bright).attr("opacity", 0.6)
+    .attr("filter", "url(#glow)");
+});
+
+// ──────────────────────────────────────────────────────────────
+// ⑦ リング3の外側装飾円
+// ──────────────────────────────────────────────────────────────
+
+svg.selectAll(".outer-circle").data(centersOuter).join("circle")
+  .attr("class", "outer-circle")
+  .attr("cx", d => d.x).attr("cy", d => d.y).attr("r", R)
+  .attr("fill", "none").attr("stroke", pal.dark)
+  .attr("stroke-width", 0.4).attr("opacity", 0.18);
+
+// ──────────────────────────────────────────────────────────────
+// ⑧ メタトロンキューブ：19点の全結合ライン（171本）
+// ──────────────────────────────────────────────────────────────
+// フラワーオブライフの19円の中心点をすべて結ぶと
+// 三角形・六角形・ダビデの星（ソロモンの印）が現れる
+
+// 全ペアを生成
+const cubePairs = [];
+for (let i = 0; i < centers19.length; i++) {
+  for (let j = i + 1; j < centers19.length; j++) {
+    const a = centers19[i], b = centers19[j];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y) / R;
+    cubePairs.push({ a, b, dist });
+  }
+}
+
+// 距離が短いほど不透明にする（幾何学パターンを浮かび上がらせる）
+function cubeLineOpacity(dist, baseMult) {
+  const base = Math.max(0.03, 0.32 - dist * 0.075);
+  return base * baseMult;
+}
+
+const cubeGroup = svg.append("g").attr("class", "cube-group");
+
+cubeGroup.selectAll(".cube-line").data(cubePairs).join("line")
+  .attr("class", "cube-line")
+  .attr("x1", d => d.a.x).attr("y1", d => d.a.y)
+  .attr("x2", d => d.b.x).attr("y2", d => d.b.y)
+  .attr("stroke", pal.cube)
+  .attr("stroke-width", d => d.dist < 1.2 ? 0.6 : d.dist < 2.1 ? 0.45 : 0.3)
+  .attr("opacity", d => cubeLineOpacity(d.dist, pal.cubeOp / 0.12));
+
+// ──────────────────────────────────────────────────────────────
+// ⑨ フラワーオブライフ：主要19円
+// ──────────────────────────────────────────────────────────────
+
+const flowerCircles = svg.selectAll(".flower-circle")
+  .data(centers19).join("circle")
+  .attr("class", "flower-circle")
+  .attr("cx", d => d.x).attr("cy", d => d.y).attr("r", R)
+  .attr("fill", "none").attr("stroke", pal.main)
+  .attr("stroke-width", 0.85).attr("opacity", 0.55)
+  .attr("filter", "url(#glow)");
+
+// ──────────────────────────────────────────────────────────────
+// ⑩ アニメーション：呼吸・リップルエフェクト（位相ずらし）
+// ──────────────────────────────────────────────────────────────
+
+flowerCircles.each(function(d, i) {
+  const el = d3.select(this);
+  const period = 2500 + d.ring * 550;
+  const baseOp = 0.6  - d.ring * 0.08;
+  const maxOp  = Math.min(0.95, baseOp + 0.38);
+  const minOp  = Math.max(0.07, baseOp - 0.22);
+  const maxW   = Math.max(0.6, 1.7 - d.ring * 0.15);
+  const minW   = 0.35;
+
+  function pulse() {
+    el.transition("pulse")           // 名前付きトランジション（色変更と競合しない）
+      .delay(i * 115)
+      .duration(period)
+      .ease(d3.easeSinInOut)
+      .attr("opacity", maxOp)
+      .attr("stroke-width", maxW)
+      .transition("pulse")
+      .duration(period)
+      .ease(d3.easeSinInOut)
+      .attr("opacity", minOp)
+      .attr("stroke-width", minW)
+      .on("end", pulse);
+  }
+  pulse();
+});
+
+// ──────────────────────────────────────────────────────────────
+// ⑪ 中心円の特別強調
+// ──────────────────────────────────────────────────────────────
+
+const centerRing = svg.append("circle").attr("class", "center-ring")
+  .attr("cx", cx).attr("cy", cy).attr("r", R)
+  .attr("fill", "none").attr("stroke", pal.bright)
+  .attr("stroke-width", 1.8).attr("opacity", 0.88)
+  .attr("filter", "url(#strongGlow)");
+
+svg.append("circle").attr("class", "center-dot")
+  .attr("cx", cx).attr("cy", cy).attr("r", 5)
+  .attr("fill", "#FFFFFF").attr("opacity", 1.0)
+  .attr("filter", "url(#xGlow)");
+
+// 中心円パルス
+(function pulseCenterRing() {
+  centerRing.transition("pulse-center")
+    .duration(2200).ease(d3.easeSinInOut)
+    .attr("opacity", 1.0).attr("stroke-width", 2.3)
+    .transition("pulse-center")
+    .duration(2200).ease(d3.easeSinInOut)
+    .attr("opacity", 0.62).attr("stroke-width", 1.1)
+    .on("end", pulseCenterRing);
+})();
+
+// ──────────────────────────────────────────────────────────────
+// ⑫ ビネット（周辺減光）
+// ──────────────────────────────────────────────────────────────
+
+svg.append("rect").attr("width", W).attr("height", H)
+  .attr("fill", "url(#gradVignette)");
+
+// ──────────────────────────────────────────────────────────────
+// ⑬ UI：タイトル・モードインジケーター・ヒント
+// ──────────────────────────────────────────────────────────────
+
+// タイトルテキスト
+const titleText = svg.append("text").attr("class", "title-text")
+  .attr("x", cx).attr("y", H - 22)
+  .attr("text-anchor", "middle")
+  .attr("fill", pal.main).attr("opacity", 0.38)
+  .attr("font-family", "Georgia, 'Times New Roman', serif")
+  .attr("font-size", "11px").attr("letter-spacing", "5px")
+  .text(pal.label);
+
+// クリックヒント（初回3秒後に表示→フェードアウト）
+const hintText = svg.append("text").attr("class", "hint-text")
+  .attr("x", cx).attr("y", H - 48)
+  .attr("text-anchor", "middle")
+  .attr("fill", "#FFFFFF").attr("opacity", 0)
+  .attr("font-family", "Georgia, serif").attr("font-size", "9px")
+  .attr("letter-spacing", "3px")
+  .text("CLICK TO CHANGE COLOR MODE");
+
+hintText.transition().delay(2000).duration(800).attr("opacity", 0.3)
+  .transition().delay(3000).duration(1200).attr("opacity", 0);
+
+// モードインジケーター（3つのドット）
+const dotCx = [cx - 20, cx, cx + 20];
+const modeDots = svg.selectAll(".mode-dot")
+  .data(PALETTES).join("circle")
+  .attr("class", "mode-dot")
+  .attr("cx", (_, i) => dotCx[i]).attr("cy", H - 50)
+  .attr("r", (_, i) => i === modeIndex ? 4 : 2.5)
+  .attr("fill", d => d.main)
+  .attr("opacity", (_, i) => i === modeIndex ? 0.85 : 0.3);
+
+// ──────────────────────────────────────────────────────────────
+// ⑭ カラーモード切り替え関数
+// ──────────────────────────────────────────────────────────────
+
+function changeMode() {
+  modeIndex = (modeIndex + 1) % 3;
+  pal = PALETTES[modeIndex];
+  const DUR  = 850;
+  const ease = d3.easeCubicInOut;
+
+  // フラワー19円 → 新しいメインカラー
+  d3.selectAll(".flower-circle")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.main);
+
+  // 外側装飾円
+  d3.selectAll(".outer-circle")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.dark);
+
+  // メタトロンキューブ線 → 色 + 透明度が変わる
+  d3.selectAll(".cube-line")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.cube)
+    .attr("opacity", d => cubeLineOpacity(d.dist, pal.cubeOp / 0.12));
+
+  // 内側境界リング
+  d3.selectAll(".inner-ring")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.main);
+
+  // 外側装飾リング
+  d3.selectAll(".outer-ring")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.main);
+
+  // 目盛り
+  d3.selectAll(".tick-line")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.main);
+
+  // 宝石（後光・本体）
+  d3.selectAll(".gem-aura")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("fill", pal.main);
+  d3.selectAll(".gem-core")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("fill", pal.bright);
+
+  // 中心円
+  d3.select(".center-ring")
+    .transition("color").duration(DUR).ease(ease)
+    .attr("stroke", pal.bright);
+
+  // 中央グラジエントの色を更新
+  const gcColors = [pal.g0, pal.g1, pal.g2, "#000"];
+  d3.selectAll("#gradCenter stop").each(function(_, i) {
+    d3.select(this).transition("color").duration(DUR).ease(ease)
+      .attr("stop-color", gcColors[i]);
+  });
+
+  // タイトルテキスト
+  titleText.transition("color").duration(DUR).ease(ease)
+    .attr("fill", pal.main)
+    .on("end", function() { d3.select(this).text(pal.label); });
+
+  // モードドット更新
+  modeDots
+    .transition("color").duration(DUR).ease(ease)
+    .attr("r", (_, i) => i === modeIndex ? 4 : 2.5)
+    .attr("fill", d => d.main)
+    .attr("opacity", (_, i) => i === modeIndex ? 0.85 : 0.3);
+
+  // クリックフラッシュ（短い光）
+  const flash = svg.append("circle")
+    .attr("cx", cx).attr("cy", cy).attr("r", R * 0.5)
+    .attr("fill", pal.bright).attr("opacity", 0.25)
+    .attr("filter", "url(#xGlow)");
+  flash.transition().duration(600).ease(d3.easeCubicOut)
+    .attr("r", R * 3).attr("opacity", 0)
+    .on("end", function() { d3.select(this).remove(); });
+}
+
+// クリックイベント（SVG全体）
+svg.on("click", changeMode);
+
+</script>
+</body>
+</html>
